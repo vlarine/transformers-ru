@@ -39,6 +39,22 @@ $ python3 convert_tf_checkpoint_to_pytorch.py \
 
 ## Visualization
 
-The attention-head visualization from BertViz:
+The attention-head view visualization from BertViz:
+![Attention-head view](https://github.com/vlarine/transformers-ru/blob/master/img/head.png)
+
 [[Notebook]](https://github.com/vlarine/transformers-ru/blob/master/head_view_bert.ipynb)
+
+
+The model view visualization from BertViz:
+![Model view](https://github.com/vlarine/transformers-ru/blob/master/img/model.jpg)
+
+[[Notebook]](https://github.com/vlarine/transformers-ru/blob/master/model_view_bert.ipynb)
+
+The neuron view visualization from BertViz:
+![Neuron view](https://github.com/vlarine/transformers-ru/blob/master/img/neuron.png)
+
+[[Notebook]](https://github.com/vlarine/transformers-ru/blob/master/neuron_view_bert.ipynb)
+
+
+
 
