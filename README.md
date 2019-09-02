@@ -12,6 +12,7 @@ There are models form:
 * [DeepPavlov project](http://docs.deeppavlov.ai/en/master/features/models/bert.html)
 * [Hugging Face repository](https://github.com/huggingface/pytorch-transformers)
 * [Facebook research](https://github.com/facebookresearch/XLM/)
+* [Facebook's fairseq](https://github.com/pytorch/fairseq)
 * [Denis Antyukhov](https://towardsdatascience.com/pre-training-bert-from-scratch-with-cloud-tpu-6e2f71028379) [Google Colab code](https://colab.research.google.com/drive/1nVn6AFpQSzXBt8_ywfx6XR8ZfQXlKGAz)
 
 | Model description | Config | Vocabulary | Model | BPE codes |
@@ -25,6 +26,9 @@ There are models form:
 |XLM (MLM) 17 languages||[[facebook]](https://dl.fbaipublicfiles.com/XLM/vocab_xnli_17)|[[facebook]](https://dl.fbaipublicfiles.com/XLM/mlm_17_1280.pth)|[[facebook]](https://dl.fbaipublicfiles.com/XLM/codes_xnli_17)|
 |XLM (MLM) 100 languages||[[facebook]](https://dl.fbaipublicfiles.com/XLM/vocab_xnli_100)|[[facebook]](https://dl.fbaipublicfiles.com/XLM/mlm_100_1280.pth)|[[facebook]](https://dl.fbaipublicfiles.com/XLM/codes_xnli_100)|
 |Denis Antyukhov BERT-Base, Russian, Uncased, 12-layer, 768-hidden, 12-heads|||[[bert_resourses]](https://storage.googleapis.com/bert_resourses/russian_uncased_L-12_H-768_A-12.zip)|
+|Facebook-FAIR's WMT'19 en-ru|||[[fairseq]](https://dl.fbaipublicfiles.com/fairseq/models/wmt19.en-ru.ensemble.tar.gz)|
+|Facebook-FAIR's WMT'19 ru-en|||[[fairseq]](https://dl.fbaipublicfiles.com/fairseq/models/wmt19.ru-en.ensemble.tar.gz)|
+|Facebook-FAIR's WMT'19 ru|||[[fairseq]](https://dl.fbaipublicfiles.com/fairseq/models/lm/wmt19.ru.tar.gz)|
 
 ## Converting TensorFlow models to PyTorch
 
