@@ -61,6 +61,24 @@ The neuron view visualization from BertViz:
 
 [[Notebook]](https://github.com/vlarine/transformers-ru/blob/master/neuron_view_bert.ipynb)
 
+## RNN Models
 
+There are some RNN models for russian language.
 
+### ELMo
 
+#### [DeepPavlov](http://docs.deeppavlov.ai/en/master/features/pretrained_vectors.html)
+
+* ELMo on Russian Wikipedia: [[config]](https://github.com/deepmipt/DeepPavlov/blob/master/deeppavlov/configs/elmo_embedder/elmo_ru_wiki.json), [[model]](http://files.deeppavlov.ai/deeppavlov_data/elmo_ru-wiki_600k_steps.tar.gz)
+* ELMo on Russian WMT News: [[config]](https://github.com/deepmipt/DeepPavlov/blob/master/deeppavlov/configs/elmo_embedder/elmo_ru_news.json), [[model]](http://files.deeppavlov.ai/deeppavlov_data/elmo_ru-news_wmt11-16_1.5M_steps.tar.gz)
+* ELMo on Russian Twitter: [[config]](https://github.com/deepmipt/DeepPavlov/blob/master/deeppavlov/configs/elmo_embedder/elmo_ru_twitter.json), [[model]](http://files.deeppavlov.ai/deeppavlov_data/elmo_ru-twitter_2013-01_2018-04_600k_steps.tar.gz)
+
+#### [RusVectōrēs](http://rusvectores.org/en/models/)
+
+* RNC and Wikipedia December 2018 (tokens): [[model]](http://vectors.nlpl.eu/repository/11/195.zip)
+* RNC and Wikipedia December 2018 (lemmas): [[model]](http://vectors.nlpl.eu/repository/11/196.zip)
+
+### ULMFit
+
+* [Pavel Pleskov model](https://github.com/ppleskov/Russian-Language-Model): [[model]](https://drive.google.com/open?id=1gtIfMcu7q44q3aViepWE63WgsdY2Bjvn)
+* [mamamot model](https://github.com/mamamot/Russian-ULMFit/): [[model]](https://drive.google.com/open?id=1_d4XCMMWdIZt57JJyH34bzY2gRSB7KTE)
