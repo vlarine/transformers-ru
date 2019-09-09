@@ -5,6 +5,7 @@ python3 run_squad.py \
   --config_name ./bert-base-multilingual-uncased-config.json \
   --tokenizer_name ./bert-base-multilingual-uncased-vocab.txt \
   --model_name_or_path ./bert-base-multilingual-uncased-pytorch_model.bin \
+  --do_lower_case \
   --do_train \
   --do_eval \
   --train_file $SQUAD_DIR/train-v1.1.json \
@@ -17,4 +18,5 @@ python3 run_squad.py \
   --doc_stride 128 \
   --save_steps 2000 \
   --overwrite_cache \
+  --overwrite_output_dir \
   --output_dir /tmp/debug_squad/

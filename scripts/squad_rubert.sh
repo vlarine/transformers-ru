@@ -17,4 +17,5 @@ python3 run_squad.py \
   --doc_stride 128 \
   --save_steps 2000 \
   --overwrite_cache \
+  --overwrite_output_dir \
   --output_dir /tmp/debug_squad/
