@@ -43,6 +43,20 @@ $ python3 convert_tf_checkpoint_to_pytorch.py \
     --pytorch_dump_path rubert_cased_L-12_H-768_A-12_v1/bert_model.bin
 ```
 
+## Models comparison
+
+There are [scripts](scripts) to train and evaluate models on [the Sber SQuAD](http://docs.deeppavlov.ai/en/master/features/models/squad.html) dataset for the russian language [[download dataset]](http://files.deeppavlov.ai/datasets/sber_squad-v1.1.tar.gz).
+
+Comparision of BERT models trained on the Sber SQuAD dataset:
+
+| Model | EM (dev) | F-1 (dev) |
+|-|-|-|
+|BERT-Base, Multilingual Cased|64.85|83.68|
+|BERT-Base, Multilingual Uncased|64.73|83.25|
+|RuBERT|**66.38**|**84.58**|
+|SlavicBERT|65.23|83.68|
+|Denis Antyukhov BERT-Base|46.54|67.75|
+
 ## Visualization
 
 The attention-head view visualization from BertViz:
