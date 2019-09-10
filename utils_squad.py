@@ -795,8 +795,8 @@ def write_predictions_extended(all_examples, all_features, all_results, n_best_s
             tok_text = " ".join(tok_text.split())
             orig_text = " ".join(orig_tokens)
 
-            final_text = get_final_text(tok_text, orig_text, tokenizer.do_lower_case,
-                                        verbose_logging)
+            do_lower_case = tokenizer.do_lower_case if hasattr(tokenizer, 'do_lower_case') else True
+            final_text = get_final_text(tok_text, orig_text, do_lower_case, verbose_logging)
 
             if final_text in seen_predictions:
                 continue
