@@ -588,7 +588,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
                 tok_text = " ".join(tok_text.split())
                 orig_text = " ".join(orig_tokens)
 
-                final_text = get_final_text(tok_text, orig_text, do_lower_case, verbose_logging)
+                final_text = get_final_text(BasicTokenizer(do_lower_case=do_lower_case), tok_text, orig_text, do_lower_case, verbose_logging)
                 if final_text in seen_predictions:
                     continue
 
@@ -796,7 +796,7 @@ def write_predictions_extended(all_examples, all_features, all_results, n_best_s
             orig_text = " ".join(orig_tokens)
 
             do_lower_case = tokenizer.do_lower_case if hasattr(tokenizer, 'do_lower_case') else True
-            final_text = get_final_text(tok_text, orig_text, do_lower_case, verbose_logging)
+            final_text = get_final_text(None, tok_text, orig_text, do_lower_case, verbose_logging)
 
             if final_text in seen_predictions:
                 continue
@@ -869,7 +869,7 @@ def write_predictions_extended(all_examples, all_features, all_results, n_best_s
     return out_eval
 
 
-def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
+def get_final_text(tokenizer, pred_text, orig_text, do_lower_case, verbose_logging=False):
     """Project the tokenized prediction back to the original text."""
 
     # When we created the data, we kept track of the alignment between original
@@ -912,9 +912,7 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
     # and `pred_text`, and check if they are the same length. If they are
     # NOT the same length, the heuristic has failed. If they are the same
     # length, we assume the characters are one-to-one aligned.
-    tokenizer = BasicTokenizer(do_lower_case=do_lower_case)
-
-    tok_text = " ".join(tokenizer.tokenize(orig_text))
+    tok_text = " ".join(tokenizer.tokenize(orig_text)) if tokenizer else orig_text
 
     start_position = tok_text.find(pred_text)
     if start_position == -1:
