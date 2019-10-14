@@ -14,6 +14,7 @@ There are models form:
 * [Facebook research](https://github.com/facebookresearch/XLM/)
 * [Facebook's fairseq](https://github.com/pytorch/fairseq)
 * [Denis Antyukhov](https://towardsdatascience.com/pre-training-bert-from-scratch-with-cloud-tpu-6e2f71028379) [Google Colab code](https://colab.research.google.com/drive/1nVn6AFpQSzXBt8_ywfx6XR8ZfQXlKGAz)
+* [Russian RuBERTa](https://github.com/vlarine/ruberta)
 
 | Model description | # params | Config | Vocabulary | Model | BPE codes |
 |-|-|:-|:-|:-|:-|
@@ -29,6 +30,7 @@ There are models form:
 |Facebook-FAIR's WMT'19 en-ru||||[[fairseq] 12G](https://dl.fbaipublicfiles.com/fairseq/models/wmt19.en-ru.ensemble.tar.gz)|
 |Facebook-FAIR's WMT'19 ru-en||||[[fairseq] 12G](https://dl.fbaipublicfiles.com/fairseq/models/wmt19.ru-en.ensemble.tar.gz)|
 |Facebook-FAIR's WMT'19 ru||||[[fairseq] 2,1G](https://dl.fbaipublicfiles.com/fairseq/models/lm/wmt19.ru.tar.gz)|
+|Russian RuBERTa||||[[Google Drive] 247M](https://drive.google.com/open?id=1MC-5Qy-qWq1mHMiF1D7GIsUwYLuLanmy)|
 
 ## Converting TensorFlow models to PyTorch
 
@@ -56,6 +58,7 @@ Comparision of BERT models trained on the Sber SQuAD dataset:
 |RuBERT|**66.38**|**84.58**|
 |SlavicBERT|65.23|83.68|
 |Denis Antyukhov BERT-Base|46.54|67.75|
+|RuBERTa-base|53.22|74.05|
 
 ## Visualization
 

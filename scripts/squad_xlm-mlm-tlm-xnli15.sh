@@ -4,6 +4,7 @@ python3 run_squad.py \
   --model_type xlm \
   --config_name ./xlm-mlm-tlm-xnli15-1024-config.json \
   --tokenizer_name ./xlm-mlm-tlm-xnli15-1024-vocab.json \
+  --merges_file ./xlm-mlm-tlm-xnli15-1024-merges.txt \
   --model_name_or_path ./xlm-mlm-tlm-xnli15-1024-pytorch_model.bin \
   --do_lower_case \
   --do_train \

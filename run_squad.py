@@ -32,14 +32,16 @@ from tqdm import tqdm, trange
 
 from tensorboardX import SummaryWriter
 
-from pytorch_transformers import (WEIGHTS_NAME, BertConfig,
+from transformers_dev import (WEIGHTS_NAME, BertConfig,
                                   BertForQuestionAnswering, BertTokenizer,
                                   XLMConfig, XLMForQuestionAnswering,
                                   XLMTokenizer, XLNetConfig,
                                   XLNetForQuestionAnswering,
-                                  XLNetTokenizer)
+                                  XLNetTokenizer,
+                                  DistilBertConfig, DistilBertForQuestionAnswering, DistilBertTokenizer,
+                                  RobertaConfig, RobertaForQuestionAnswering, RobertaTokenizer, RubertaTokenizer)
 
-from pytorch_transformers import AdamW, WarmupLinearSchedule
+from transformers_dev import AdamW, WarmupLinearSchedule
 
 from utils_squad import (read_squad_examples, convert_examples_to_features,
                          RawResult, write_predictions,
@@ -59,6 +61,9 @@ MODEL_CLASSES = {
     'bert': (BertConfig, BertForQuestionAnswering, BertTokenizer),
     'xlnet': (XLNetConfig, XLNetForQuestionAnswering, XLNetTokenizer),
     'xlm': (XLMConfig, XLMForQuestionAnswering, XLMTokenizer),
+    'distilbert': (DistilBertConfig, DistilBertForQuestionAnswering, DistilBertTokenizer),
+    'roberta': (RobertaConfig, RobertaForQuestionAnswering, RobertaTokenizer),
+    'ruberta': (RobertaConfig, RobertaForQuestionAnswering, RubertaTokenizer),
 }
 
 def set_seed(args):
@@ -133,7 +138,7 @@ def train(args, train_dataset, model, tokenizer):
             batch = tuple(t.to(args.device) for t in batch)
             inputs = {'input_ids':       batch[0],
                       'attention_mask':  batch[1],
-                      'token_type_ids':  None if args.model_type == 'xlm' else batch[2],
+                      'token_type_ids':  None if args.model_type in ['xlm', 'roberta', 'ruberta'] else batch[2],
                       'start_positions': batch[3],
                       'end_positions':   batch[4]}
             if args.model_type in ['xlnet', 'xlm']:
@@ -196,7 +201,7 @@ def train(args, train_dataset, model, tokenizer):
 
 
 def evaluate(args, model, tokenizer, prefix=""):
-    dataset, examples, features = load_and_cache_examples(args, tokenizer, evaluate=True, output_examples=True)
+    dataset, examples, features = load_and_cache_examples(args, tokenizer, evaluate=True, output_examples=True, model_type=args.model_type)
 
     if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(args.output_dir)
@@ -217,7 +222,7 @@ def evaluate(args, model, tokenizer, prefix=""):
         with torch.no_grad():
             inputs = {'input_ids':      batch[0],
                       'attention_mask': batch[1],
-                      'token_type_ids': None if args.model_type == 'xlm' else batch[2]  # XLM don't use segment_ids
+                      'token_type_ids': None if args.model_type in ['xlm', 'roberta', 'ruberta'] else batch[2]  # XLM don't use segment_ids
                       }
             example_indices = batch[3]
             if args.model_type in ['xlnet', 'xlm']:
@@ -261,7 +266,8 @@ def evaluate(args, model, tokenizer, prefix=""):
         write_predictions(examples, features, all_results, args.n_best_size,
                         args.max_answer_length, args.do_lower_case, output_prediction_file,
                         output_nbest_file, output_null_log_odds_file, args.verbose_logging,
-                        args.version_2_with_negative, args.null_score_diff_threshold)
+                        args.version_2_with_negative, args.null_score_diff_threshold,
+                        tokenizer, args.model_type)
 
     # Evaluate with the official SQuAD script
     evaluate_options = EVAL_OPTS(data_file=args.predict_file,
@@ -271,7 +277,7 @@ def evaluate(args, model, tokenizer, prefix=""):
     return results
 
 
-def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False):
+def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False, model_type='bert'):
     if args.local_rank not in [-1, 0] and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
@@ -291,6 +297,10 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
                                                 version_2_with_negative=args.version_2_with_negative)
         features = convert_examples_to_features(examples=examples,
                                                 tokenizer=tokenizer,
+                                                cls_token = '<BOS>' if model_type in ['roberta', 'ruberta'] else '[CLS]',
+                                                sep_token = '<EOS>' if model_type in ['roberta', 'ruberta'] else '[SEP]',
+                                                pad_token = 1 if model_type in ['roberta', 'ruberta'] else  0,
+                                                add_prefix_space = True if model_type == 'roberta' else  False,
                                                 max_seq_length=args.max_seq_length,
                                                 doc_stride=args.doc_stride,
                                                 max_query_length=args.max_query_length,
@@ -344,6 +354,8 @@ def main():
                         help="Pretrained config name or path if not the same as model_name")
     parser.add_argument("--tokenizer_name", default="", type=str,
                         help="Pretrained tokenizer name or path if not the same as model_name")
+    parser.add_argument("--merges_file", default="", type=str,
+                        help="Path to the merges file")
     parser.add_argument("--cache_dir", default="", type=str,
                         help="Where do you want to store the pre-trained models downloaded from s3")
 
@@ -463,7 +475,15 @@ def main():
     args.model_type = args.model_type.lower()
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
-    tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
+
+    if args.merges_file:
+        tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
+                                                    merges_file=args.merges_file,
+                                                    do_lower_case=args.do_lower_case)
+    else:
+        tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
+                                                    do_lower_case=args.do_lower_case)
+
     model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
 
     if args.local_rank == 0:
@@ -475,7 +495,7 @@ def main():
 
     # Training
     if args.do_train:
-        train_dataset = load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False)
+        train_dataset = load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False, model_type=args.model_type)
         global_step, tr_loss = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
@@ -498,7 +518,14 @@ def main():
 
         # Load a trained model and vocabulary that you have fine-tuned
         model = model_class.from_pretrained(args.output_dir)
-        tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+        if args.merges_file:
+            tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
+                                                        merges_file=args.merges_file,
+                                                        do_lower_case=args.do_lower_case)
+        else:
+            tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
+                                                        do_lower_case=args.do_lower_case)
+
         model.to(args.device)
 
 
@@ -508,7 +535,7 @@ def main():
         checkpoints = [args.output_dir]
         if args.eval_all_checkpoints:
             checkpoints = list(os.path.dirname(c) for c in sorted(glob.glob(args.output_dir + '/**/' + WEIGHTS_NAME, recursive=True)))
-            logging.getLogger("pytorch_transformers.modeling_utils").setLevel(logging.WARN)  # Reduce model loading logs
+            logging.getLogger("transformers_dev.modeling_utils").setLevel(logging.WARN)  # Reduce model loading logs
 
         logger.info("Evaluate the following checkpoints: %s", checkpoints)
 
