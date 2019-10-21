@@ -3,7 +3,7 @@ export SQUAD_DIR=~/data/sber_SQuAD/
 python3 run_squad.py \
   --model_type ruberta \
   --config_name ./ruberta_base50/config.json \
-  --tokenizer_name ./ruberta_base50/vocab_30000.bpe \
+  --tokenizer_name ./ruberta_base50/vocab_50000.bpe \
   --merges_file ./ruberta_base50/dict.txt \
   --model_name_or_path ./ruberta_base50/pytorch_model.bin \
   --do_train \
