@@ -126,7 +126,7 @@ class RubertaTokenizer(PreTrainedTokenizer):
         return self.bpe.id_to_subword(index)
 
     def convert_tokens_to_string(self, tokens):
-        return self.bpe.decode([self._convert_token_to_id(token) for token in tokens])[0]
+        return self.bpe.decode([self.bpe.subword_to_id(token) for token in tokens])[0]
 
     def convert_tokens_to_ids_(self, tokens):
         res = []
