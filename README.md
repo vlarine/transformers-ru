@@ -30,7 +30,7 @@ There are models form:
 |Facebook-FAIR's WMT'19 en-ru||||[[fairseq] 12G](https://dl.fbaipublicfiles.com/fairseq/models/wmt19.en-ru.ensemble.tar.gz)|
 |Facebook-FAIR's WMT'19 ru-en||||[[fairseq] 12G](https://dl.fbaipublicfiles.com/fairseq/models/wmt19.ru-en.ensemble.tar.gz)|
 |Facebook-FAIR's WMT'19 ru||||[[fairseq] 2,1G](https://dl.fbaipublicfiles.com/fairseq/models/lm/wmt19.ru.tar.gz)|
-|Russian RuBERTa||||[[Google Drive] 247M](https://drive.google.com/open?id=1MC-5Qy-qWq1mHMiF1D7GIsUwYLuLanmy)|
+|Russian RuBERTa||||[[Google Drive] 247M](https://drive.google.com/open?id=1WYpuSCL8oEtW65HIN1izsN_cR5Mizqmd)|
 
 ## Converting TensorFlow models to PyTorch
 
@@ -57,8 +57,7 @@ Comparision of BERT models trained on the Sber SQuAD dataset:
 |BERT-Base, Multilingual Uncased|64.73|83.25|
 |RuBERT|**66.38**|**84.58**|
 |SlavicBERT|65.23|83.68|
-|Denis Antyukhov BERT-Base|46.54|67.75|
-|RuBERTa-base|53.22|74.05|
+|RuBERTa-base|59.45|78.60|
 
 ## Visualization
 
