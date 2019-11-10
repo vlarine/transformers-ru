@@ -78,6 +78,11 @@ class RobertaModel(FairseqLanguageModel):
                             help='number of positional embeddings to learn')
         parser.add_argument('--load-checkpoint-heads', action='store_true',
                             help='(re-)register and load heads when loading checkpoints')
+        # args for "Reducing Transformer Depth on Demand with Structured Dropout" (Fan et al., 2019)
+        parser.add_argument('--encoder-layerdrop', type=float, metavar='D', default=0,
+                            help='LayerDrop probability for encoder')
+        parser.add_argument('--encoder-layers-to-keep', default=None,
+                            help='which layers to *keep* when pruning as a comma-separated list')
 
     @classmethod
     def build_model(cls, args, task):
@@ -127,20 +132,22 @@ class RobertaModel(FairseqLanguageModel):
         return {'self'}
 
     @classmethod
-    def from_pretrained(cls, model_name_or_path, checkpoint_file='model.pt', data_name_or_path='.', **kwargs):
+    def from_pretrained(cls, model_name_or_path, checkpoint_file='model.pt', data_name_or_path='.', bpe='gpt2', **kwargs):
         from fairseq import hub_utils
         x = hub_utils.from_pretrained(
             model_name_or_path,
             checkpoint_file,
             data_name_or_path,
             archive_map=cls.hub_models(),
-            bpe='gpt2',
+            bpe=bpe,
             load_checkpoint_heads=True,
             **kwargs,
         )
         return RobertaHubInterface(x['args'], x['task'], x['models'][0])
 
     def upgrade_state_dict_named(self, state_dict, name):
+        super().upgrade_state_dict_named(state_dict, name)
+
         prefix = name + '.' if name != '' else ''
         current_head_names = [] if not hasattr(self, 'classification_heads') else \
             self.classification_heads.keys()
@@ -187,6 +194,30 @@ class RobertaModel(FairseqLanguageModel):
                     state_dict[prefix + 'classification_heads.' + k] = v
 
 
+@register_model('xlmr')
+class XLMRModel(RobertaModel):
+    @classmethod
+    def hub_models(cls):
+        return {
+            'xlmr.base.v0': 'http://dl.fbaipublicfiles.com/fairseq/models/xlmr.base.v0.tar.gz',
+            'xlmr.large.v0': 'http://dl.fbaipublicfiles.com/fairseq/models/xlmr.large.v0.tar.gz',
+        }
+
+    @classmethod
+    def from_pretrained(cls, model_name_or_path, checkpoint_file='model.pt', data_name_or_path='.', bpe='sentencepiece', **kwargs):
+        from fairseq import hub_utils
+        x = hub_utils.from_pretrained(
+            model_name_or_path,
+            checkpoint_file,
+            data_name_or_path,
+            archive_map=cls.hub_models(),
+            bpe=bpe,
+            load_checkpoint_heads=True,
+            **kwargs,
+        )
+        return RobertaHubInterface(x['args'], x['task'], x['models'][0])
+
+
 class RobertaLMHead(nn.Module):
     """Head for masked language modeling."""
 
@@ -201,14 +232,17 @@ class RobertaLMHead(nn.Module):
         self.weight = weight
         self.bias = nn.Parameter(torch.zeros(output_dim))
 
-    def forward(self, features, **kwargs):
+    def forward(self, features, masked_tokens=None, **kwargs):
+        # Only project the unmasked tokens while training,
+        # saves both memory and computation
+        if masked_tokens is not None:
+            features = features[masked_tokens, :]
+
         x = self.dense(features)
         x = self.activation_fn(x)
         x = self.layer_norm(x)
-
         # project back to size of vocabulary with bias
         x = F.linear(x, self.weight) + self.bias
-
         return x
 
 
@@ -242,6 +276,15 @@ class RobertaEncoder(FairseqDecoder):
     def __init__(self, args, dictionary):
         super().__init__(dictionary)
         self.args = args
+
+        # RoBERTa is a sentence encoder model, so users will intuitively trim
+        # encoder layers. However, the implementation uses the fairseq decoder,
+        # so we fix here.
+        if args.encoder_layers_to_keep:
+            args.encoder_layers = len(args.encoder_layers_to_keep.split(","))
+            args.decoder_layers_to_keep = args.encoder_layers_to_keep
+            args.encoder_layers_to_keep = None
+
         self.sentence_encoder = TransformerSentenceEncoder(
             padding_idx=dictionary.pad(),
             vocab_size=len(dictionary),
@@ -252,6 +295,7 @@ class RobertaEncoder(FairseqDecoder):
             dropout=args.dropout,
             attention_dropout=args.attention_dropout,
             activation_dropout=args.activation_dropout,
+            layerdrop=args.encoder_layerdrop,
             max_seq_len=args.max_positions,
             num_segments=0,
             encoder_normalize_before=True,
@@ -265,7 +309,7 @@ class RobertaEncoder(FairseqDecoder):
             weight=self.sentence_encoder.embed_tokens.weight,
         )
 
-    def forward(self, src_tokens, features_only=False, return_all_hiddens=False, **unused):
+    def forward(self, src_tokens, features_only=False, return_all_hiddens=False, masked_tokens=None, **unused):
         """
         Args:
             src_tokens (LongTensor): input tokens of shape `(batch, src_len)`
@@ -283,18 +327,19 @@ class RobertaEncoder(FairseqDecoder):
         """
         x, extra = self.extract_features(src_tokens, return_all_hiddens)
         if not features_only:
-            x = self.output_layer(x)
+            x = self.output_layer(x, masked_tokens=masked_tokens)
         return x, extra
 
     def extract_features(self, src_tokens, return_all_hiddens=False, **unused):
         inner_states, _ = self.sentence_encoder(
-            src_tokens, last_state_only=not return_all_hiddens,
+            src_tokens,
+            last_state_only=not return_all_hiddens,
         )
         features = inner_states[-1]
         return features, {'inner_states': inner_states if return_all_hiddens else None}
 
-    def output_layer(self, features, **unused):
-        return self.lm_head(features)
+    def output_layer(self, features, masked_tokens=None, **unused):
+        return self.lm_head(features, masked_tokens)
 
     def max_positions(self):
         """Maximum output length supported by the encoder."""
@@ -328,4 +373,14 @@ def roberta_large_architecture(args):
     args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 1024)
     args.encoder_ffn_embed_dim = getattr(args, 'encoder_ffn_embed_dim', 4096)
     args.encoder_attention_heads = getattr(args, 'encoder_attention_heads', 16)
+    base_architecture(args)
+
+
+@register_model_architecture('roberta', 'xlm')
+def xlm_architecture(args):
+    args.encoder_layers = getattr(args, 'encoder_layers', 16)
+    args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 1280)
+    args.encoder_ffn_embed_dim = getattr(args, 'encoder_ffn_embed_dim', 1280*4)
+    args.encoder_attention_heads = getattr(args, 'encoder_attention_heads', 16)
+
     base_architecture(args)

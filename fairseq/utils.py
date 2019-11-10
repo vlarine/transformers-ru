@@ -16,6 +16,7 @@ import warnings
 import torch
 import torch.nn.functional as F
 
+from itertools import accumulate
 from fairseq.modules import gelu, gelu_accurate
 
 
@@ -351,3 +352,73 @@ def eval(model):
     model.eval()
     yield
     model.train(is_training)
+
+
+def has_parameters(module):
+    try:
+        next(module.parameters())
+        return True
+    except StopIteration:
+        return False
+
+
+def set_torch_seed(seed):
+    # Set seed based on args.seed and the update number so that we get
+    # reproducible results when resuming from checkpoints
+    assert isinstance(seed, int)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+
+def parse_alignment(line):
+    """
+    Parses a single line from the alingment file.
+
+    Args:
+        line (str): String containing the alignment of the format:
+            <src_idx_1>-<tgt_idx_1> <src_idx_2>-<tgt_idx_2> ..
+            <src_idx_m>-<tgt_idx_m>. All indices are 0 indexed.
+
+    Returns:
+        torch.IntTensor: packed alignments of shape (2 * m).
+    """
+    alignments = line.strip().split()
+    parsed_alignment = torch.IntTensor(2 * len(alignments))
+    for idx, alignment in enumerate(alignments):
+        src_idx, tgt_idx = alignment.split('-')
+        parsed_alignment[2 * idx] = int(src_idx)
+        parsed_alignment[2 * idx + 1] = int(tgt_idx)
+    return parsed_alignment
+
+
+def get_token_to_word_mapping(tokens, exclude_list):
+    n = len(tokens)
+    word_start = [int(token not in exclude_list) for token in tokens]
+    word_idx = list(accumulate(word_start))
+    token_to_word = {i: word_idx[i] for i in range(n)}
+    return token_to_word
+
+
+def extract_hard_alignment(attn, src_sent, tgt_sent, pad, eos):
+    tgt_valid = ((tgt_sent != pad) & (tgt_sent != eos)).nonzero().squeeze(dim=-1)
+    src_invalid = ((src_sent == pad) | (src_sent == eos)).nonzero().squeeze(dim=-1)
+    src_token_to_word = get_token_to_word_mapping(src_sent, [eos, pad])
+    tgt_token_to_word = get_token_to_word_mapping(tgt_sent, [eos, pad])
+    alignment = []
+    if len(tgt_valid) != 0 and len(src_invalid) < len(src_sent):
+        attn_valid = attn[tgt_valid]
+        attn_valid[:, src_invalid] = float('-inf')
+        _, src_indices = attn_valid.max(dim=1)
+        for tgt_idx, src_idx in zip(tgt_valid, src_indices):
+            alignment.append((src_token_to_word[src_idx.item()] - 1, tgt_token_to_word[tgt_idx.item()] - 1))
+    return alignment
+
+
+def new_arange(x, *size):
+    """
+    Return a Tensor of `size` filled with a range function on the device of x.
+    If size is empty, using the size of the variable x.
+    """
+    if len(size) == 0:
+        size = x.size()
+    return torch.arange(size[-1], device=x.device).expand(*size).contiguous()

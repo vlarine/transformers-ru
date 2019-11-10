@@ -5,6 +5,7 @@
 
 import itertools
 import math
+import os
 
 import numpy as np
 import torch
@@ -33,6 +34,8 @@ class CountingIterator(object):
 
     def __iter__(self):
         for x in self.iterable:
+            if self.count >= self.len:
+                return
             self.count += 1
             yield x
 
@@ -47,6 +50,12 @@ class CountingIterator(object):
         """Fast-forward the iterator by skipping *num_to_skip* elements."""
         next(itertools.islice(self.itr, num_to_skip, num_to_skip), None)
         return self
+
+    def take(self, n):
+        """
+        Truncates the iterator to n elements at most.
+        """
+        self.len = min(self.len, n)
 
 
 class EpochBatchIterating(object):
@@ -247,6 +256,9 @@ class EpochBatchIterator(EpochBatchIterating):
 
         if offset > 0 and offset >= len(batches):
             return None
+
+        if self.num_workers > 0:
+            os.environ['PYTHONWARNINGS'] = 'ignore:semaphore_tracker:UserWarning'
 
         return CountingIterator(
             torch.utils.data.DataLoader(

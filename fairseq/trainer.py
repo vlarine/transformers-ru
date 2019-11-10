@@ -36,13 +36,14 @@ class Trainer(object):
         self.task = task
 
         # copy model and criterion to current device
-        self.criterion = criterion
+        self._criterion = criterion
         self._model = model
         self.cuda = torch.cuda.is_available() and not args.cpu
         if args.fp16:
+            self._criterion = self._criterion.half()
             self._model = self._model.half()
         if self.cuda:
-            self.criterion = self.criterion.cuda()
+            self._criterion = self._criterion.cuda()
             self._model = self._model.cuda()
 
         self._dummy_batch = dummy_batch
@@ -53,7 +54,13 @@ class Trainer(object):
         self._optim_history = None
         self._optimizer = None
         self._prev_grad_norm = None
+        self._wrapped_criterion = None
         self._wrapped_model = None
+
+        # Fast stats sync avoids memcpy and is 7% faster when tested on 16 nodes.
+        # It is less flexible and syncs only the default stats.
+        self._all_reduce_list = [0.0] * 6
+        self.fast_stat_sync = args.fast_stat_sync
 
         self.init_meters(args)
 
@@ -74,6 +81,21 @@ class Trainer(object):
             self.meters['loss_scale'] = AverageMeter()  # dynamic loss scale
         self.meters['wall'] = TimeMeter()      # wall time in seconds
         self.meters['train_wall'] = StopwatchMeter()  # train wall time in seconds
+
+    @property
+    def criterion(self):
+        if self._wrapped_criterion is None:
+            if (
+                utils.has_parameters(self._criterion)
+                and self.args.distributed_world_size > 1
+                and not self.args.use_bmuf
+            ):
+                self._wrapped_criterion = models.DistributedFairseqModel(
+                    self.args, self._criterion
+                )
+            else:
+                self._wrapped_criterion = self._criterion
+        return self._wrapped_criterion
 
     @property
     def model(self):
@@ -99,7 +121,13 @@ class Trainer(object):
         return self._lr_scheduler
 
     def _build_optimizer(self):
-        params = list(filter(lambda p: p.requires_grad, self.model.parameters()))
+        params = list(
+            filter(
+                lambda p: p.requires_grad,
+                chain(self.model.parameters(), self.criterion.parameters()),
+            )
+        )
+
         if self.args.fp16:
             if self.cuda and torch.cuda.get_device_capability(0)[0] < 7:
                 print('| WARNING: your device does NOT support faster training with --fp16, '
@@ -114,7 +142,7 @@ class Trainer(object):
             self._optimizer = optim.build_optimizer(self.args, params)
 
         if self.args.use_bmuf:
-            self._optimizer = optim.FairseqBMUF(self.args, params, self._optimizer)
+            self._optimizer = optim.FairseqBMUF(self.args, self._optimizer)
 
         # We should initialize the learning rate scheduler immediately after
         # building the optimizer, so that the initial learning rate is set.
@@ -126,7 +154,7 @@ class Trainer(object):
         if distributed_utils.is_master(self.args):  # only save one checkpoint
             extra_state['train_meters'] = self.meters
             checkpoint_utils.save_state(
-                filename, self.args, self.get_model().state_dict(), self.criterion,
+                filename, self.args, self.get_model().state_dict(), self.get_criterion(),
                 self.optimizer, self.lr_scheduler, self.get_num_updates(),
                 self._optim_history, extra_state,
             )
@@ -142,16 +170,24 @@ class Trainer(object):
         """Load all training state from a checkpoint file."""
         extra_state, self._optim_history, last_optim_state = None, [], None
 
-        if os.path.exists(filename):
+        try:
+            from fairseq.fb_pathmgr import fb_pathmgr
+            bexists = fb_pathmgr.isfile(filename)
+        except (ModuleNotFoundError, ImportError):
+            bexists = os.path.exists(filename)
+
+        if bexists:
             state = checkpoint_utils.load_checkpoint_to_cpu(filename)
 
             # load model parameters
             try:
-                self.get_model().load_state_dict(state['model'], strict=True)
+                self.get_model().load_state_dict(state['model'], strict=True, args=self.args)
+                if utils.has_parameters(self.get_criterion()):
+                    self.get_criterion().load_state_dict(state['criterion'], strict=True)
             except Exception:
                 raise Exception(
-                    'Cannot load model parameters from checkpoint, '
-                    'please ensure that the architectures match.'
+                    'Cannot load model parameters from checkpoint {}; '
+                    'please ensure that the architectures match.'.format(filename)
                 )
 
             extra_state = state['extra_state']
@@ -164,7 +200,7 @@ class Trainer(object):
 
             # only reload optimizer and lr_scheduler if they match
             last_optim = self._optim_history[-1]
-            assert last_optim['criterion_name'] == self.criterion.__class__.__name__, \
+            assert last_optim['criterion_name'] == self.get_criterion().__class__.__name__, \
                 'Criterion does not match; please reset the optimizer (--reset-optimizer).'
             assert last_optim['optimizer_name'] == self.optimizer.__class__.__name__, \
                 'Optimizer does not match; please reset the optimizer (--reset-optimizer).'
@@ -195,10 +231,16 @@ class Trainer(object):
 
         return extra_state
 
-    def get_train_iterator(self, epoch, combine=True):
+    def get_train_iterator(self, epoch, combine=True, load_dataset=True, data_selector=None):
         """Return an EpochBatchIterator over the training set for a given epoch."""
-        print('| loading train data for epoch {}'.format(epoch))
-        self.task.load_dataset(self.args.train_subset, epoch=epoch, combine=combine)
+        if load_dataset:
+            print('| loading train data for epoch {}'.format(epoch))
+            self.task.load_dataset(
+                self.args.train_subset,
+                epoch=epoch,
+                combine=combine,
+                data_selector=data_selector,
+            )
         return self.task.get_batch_iterator(
             dataset=self.task.dataset(self.args.train_subset),
             max_tokens=self.args.max_tokens,
@@ -267,24 +309,28 @@ class Trainer(object):
                 if not ignore_grad:
                     logging_outputs.append(logging_output)
                     sample_sizes.append(sample_size)
+
+                    if self.fast_stat_sync:
+                        self._all_reduce_list[0] += sample_size
+                        self._all_reduce_list[1] += logging_output.get('nsentences', 0.0)
+                        self._all_reduce_list[2] += logging_output.get('loss', 0.0)
+                        self._all_reduce_list[3] += logging_output.get('nll_loss', 0.0)
+                        self._all_reduce_list[4] += logging_output.get('ntokens', 0.0)
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    msg = (
-                        '| WARNING: ran out of memory with exception: '
-                        + '{};'.format(e)
-                        + '\n Skipping batch'
-                    )
-                    # TODO: print should really go to logger, this print goes
-                    # to stdout, which is buffered, which in many case is not
-                    # printed out if another exception happens
-                    # print(msg)
-                    print(msg, file=sys.stderr)
+                    self._log_oom(e)
                     if raise_oom:
-                        raise ValueError(msg)
+                        raise e
+                    print("| WARNING: attempting to recover from OOM in forward/backward pass",
+                          file=sys.stderr)
                     ooms += 1
                     self.zero_grad()
                 else:
                     raise e
+
+            if self.fast_stat_sync:
+                self._all_reduce_list[5] += ooms
+
 
         if ooms > 0 and self._oom_batch is not None:
             self.handle_ooms(ooms)
@@ -293,13 +339,30 @@ class Trainer(object):
             return None
 
         # gather logging outputs from all replicas
-        if self.args.distributed_world_size > 1 and (
-            (not self.args.use_bmuf)
-            or (
-                self.args.use_bmuf
-                and (self.get_num_updates() + 1) % self.args.global_sync_iter == 0
+        if self.fast_stat_sync:
+            # rework all_gather_list
+            all_reduce_list_tensor = torch.cuda.DoubleTensor(self._all_reduce_list)
+            if self._sync_stats():
+                torch.distributed.all_reduce(all_reduce_list_tensor)
+            # Normalize loss and nll_loss by "sample_size"
+            # and convert to log base 2
+            all_reduce_list_tensor[2:4].div_(
+                (
+                    all_reduce_list_tensor[0:1] *
+                    torch.log(torch.cuda.DoubleTensor([2]))
+                )
             )
-        ):
+            self._all_reduce_list = all_reduce_list_tensor.tolist()
+            logging_output = {}
+            [
+                sample_size,
+                logging_output['nsentences'],
+                logging_output['loss'],
+                logging_output['nll_loss'],
+                logging_output['ntokens'],
+                ooms,
+            ] = self._all_reduce_list
+        elif self._sync_stats():
             logging_outputs, sample_sizes, ooms, prev_norms = \
                 zip(*distributed_utils.all_gather_list(
                     [logging_outputs, sample_sizes, ooms, self._prev_grad_norm],
@@ -320,11 +383,12 @@ class Trainer(object):
             self.zero_grad()
             return None
 
-        # aggregate logging outputs and sample sizes
-        logging_output = self.task.aggregate_logging_outputs(
-            logging_outputs, self.criterion
-        )
-        sample_size = self.task.grad_denom(sample_sizes, self.criterion)
+        if not self.fast_stat_sync:
+            # aggregate logging outputs and sample sizes
+            logging_output = self.task.aggregate_logging_outputs(
+                logging_outputs, self.get_criterion()
+            )
+            sample_size = self.task.grad_denom(sample_sizes, self.get_criterion())
 
         if not all(k in logging_output for k in ['ntokens', 'nsentences']):
             raise Exception((
@@ -366,15 +430,29 @@ class Trainer(object):
 
             if 'nll_loss' in logging_output:
                 self.meters['train_nll_loss'].update(logging_output.get('nll_loss', 0), ntokens)
+
+            # clear CUDA cache to reduce memory fragmentation
+            if (self.args.empty_cache_freq > 0 and
+                    ((self.get_num_updates() + self.args.empty_cache_freq - 1) %
+                     self.args.empty_cache_freq) == 0 and
+                    torch.cuda.is_available() and
+                    not self.args.cpu):
+                torch.cuda.empty_cache()
         except OverflowError as e:
             print('| WARNING: overflow detected, ' + str(e))
             self.zero_grad()
             logging_output = None
+        except RuntimeError as e:
+            if 'out of memory' in str(e):
+                self._log_oom(e)
+                print('| ERROR: OOM during optimization, irrecoverable')
+            raise e
 
         if self.args.fp16:
             self.meters['loss_scale'].reset()
             self.meters['loss_scale'].update(self.optimizer.scaler.loss_scale)
 
+        self.clear_buffered_stats()
         self.meters['train_wall'].stop()
 
         return logging_output
@@ -397,16 +475,17 @@ class Trainer(object):
                     sample, self.model, self.criterion
                 )
             except RuntimeError as e:
-                if 'out of memory' in str(e) and not raise_oom:
-                    print('| WARNING: ran out of memory, retrying batch')
-                    for p in self.model.parameters():
-                        if p.grad is not None:
-                            p.grad = None  # free some memory
-                    if self.cuda:
-                        torch.cuda.empty_cache()
-                    return self.valid_step(sample, raise_oom=True)
-                else:
-                    raise e
+                if 'out of memory' in str(e):
+                    self._log_oom(e)
+                    if not raise_oom:
+                        print('| WARNING: ran out of memory in validation step, retrying batch')
+                        for p in self.model.parameters():
+                            if p.grad is not None:
+                                p.grad = None  # free some memory
+                        if self.cuda:
+                            torch.cuda.empty_cache()
+                        return self.valid_step(sample, raise_oom=True)
+                raise e
 
             if ignore_results:
                 logging_output, sample_size = {}, 0
@@ -424,10 +503,10 @@ class Trainer(object):
 
         # aggregate logging outputs and sample sizes
         logging_output = self.task.aggregate_logging_outputs(
-            logging_output, self.criterion
+            logging_output, self.get_criterion()
         )
         sample_size = self.task.grad_denom(
-            sample_size, self.criterion
+            sample_size, self.get_criterion()
         )
 
         # update meters for validation
@@ -459,6 +538,9 @@ class Trainer(object):
     def zero_grad(self):
         self.optimizer.zero_grad()
 
+    def clear_buffered_stats(self):
+        self._all_reduce_list = [0.0] * 6
+
     def lr_step(self, epoch, val_loss=None):
         """Adjust the learning rate based on the validation loss."""
         self.lr_scheduler.step(epoch, val_loss)
@@ -476,6 +558,10 @@ class Trainer(object):
     def get_model(self):
         """Get the (non-wrapped) model instance."""
         return self._model
+
+    def get_criterion(self):
+        """Get the (non-wrapped) criterion instance."""
+        return self._criterion
 
     def get_meter(self, name):
         """Get a specific meter by name."""
@@ -516,3 +602,28 @@ class Trainer(object):
         torch.manual_seed(seed)
         if self.cuda:
             torch.cuda.manual_seed(seed)
+
+    def _sync_stats(self):
+        return (
+            self.args.distributed_world_size > 1 and
+            (
+                (not self.args.use_bmuf) or
+                (
+                    self.args.use_bmuf
+                    and (self.get_num_updates() + 1) % self.args.global_sync_iter == 0
+                )
+            )
+        )
+
+    def _log_oom(self, exc):
+        msg = '| OOM: Ran out of memory with exception: {}'.format(exc)
+        # TODO: print should really go to logger, this print goes
+        # to stderr, which is buffered, which in many cases is not
+        # printed out if another exception happens.
+        # NB(jerry): added a flush to mitigate this
+        print(msg, file=sys.stderr)
+        if torch.cuda.is_available() and hasattr(torch.cuda, "memory_summary"):
+            for device_idx in range(torch.cuda.device_count()):
+                print(torch.cuda.memory_summary(device=device_idx),
+                      file=sys.stderr)
+        sys.stderr.flush()

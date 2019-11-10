@@ -98,6 +98,15 @@ class TransformerLanguageModel(FairseqLanguageModel):
                             help='if set, ties the projection weights of adaptive softmax and adaptive input')
         parser.add_argument('--decoder-learned-pos', action='store_true',
                             help='use learned positional embeddings in the decoder')
+        # args for "Reducing Transformer Depth on Demand with Structured Dropout" (Fan et al., 2019)
+        parser.add_argument('--decoder-layerdrop', type=float, metavar='D', default=0,
+                            help='LayerDrop probability for decoder')
+        parser.add_argument('--decoder-layers-to-keep', default=None,
+                            help='which layers to *keep* when pruning as a comma-separated list')
+        parser.add_argument('--layernorm-embedding', action='store_true',
+                            help='add layernorm to embedding')
+        parser.add_argument('--no-scale-embedding', action='store_true',
+                            help='if True, dont scale embeddings')
         # fmt: on
 
     @classmethod
@@ -106,6 +115,9 @@ class TransformerLanguageModel(FairseqLanguageModel):
 
         # make sure all arguments are present in older models
         base_lm_architecture(args)
+
+        if args.decoder_layers_to_keep:
+            args.decoder_layers = len(args.decoder_layers_to_keep.split(","))
 
         if getattr(args, 'max_target_positions', None) is None:
             args.max_target_positions = getattr(args, 'tokens_per_sample', DEFAULT_MAX_TARGET_POSITIONS)
@@ -181,6 +193,9 @@ def base_lm_architecture(args):
 
     args.tie_adaptive_weights = getattr(args, 'tie_adaptive_weights', False)
     args.tie_adaptive_proj = getattr(args, 'tie_adaptive_proj', False)
+
+    args.no_scale_embedding = getattr(args, 'no_scale_embedding', False)
+    args.layernorm_embedding = getattr(args, 'layernorm_embedding', False)
 
 
 @register_model_architecture('transformer_lm', 'transformer_lm_big')

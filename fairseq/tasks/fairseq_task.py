@@ -3,10 +3,16 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import numpy as np
 import torch
 
 from fairseq import tokenizer
-from fairseq.data import data_utils, FairseqDataset, iterators, Dictionary
+from fairseq.data import (
+    data_utils,
+    FairseqDataset,
+    iterators,
+    Dictionary,
+)
 
 
 class FairseqTask(object):
@@ -23,6 +29,7 @@ class FairseqTask(object):
     def __init__(self, args):
         self.args = args
         self.datasets = {}
+        self.dataset_to_epoch_iter = {}
 
     @classmethod
     def load_dictionary(cls, filename):
@@ -118,12 +125,20 @@ class FairseqTask(object):
                 (default: 0).
             epoch (int, optional): the epoch to start the iterator from
                 (default: 0).
-
         Returns:
             ~fairseq.iterators.EpochBatchIterator: a batched iterator over the
                 given dataset split
         """
+        # For default fairseq task, return same iterator across epochs
+        # as datasets are not dynamic, can be overridden in task specific
+        # setting.
+        if dataset in self.dataset_to_epoch_iter:
+            return self.dataset_to_epoch_iter[dataset]
+
         assert isinstance(dataset, FairseqDataset)
+
+        # initialize the dataset with the correct starting epoch
+        dataset.set_epoch(epoch)
 
         # get indices ordered by example size
         with data_utils.numpy_seed(seed):
@@ -132,7 +147,7 @@ class FairseqTask(object):
         # filter examples that are too large
         if max_positions is not None:
             indices = data_utils.filter_by_size(
-                indices, dataset.size, max_positions, raise_exception=(not ignore_invalid_inputs),
+                indices, dataset, max_positions, raise_exception=(not ignore_invalid_inputs),
             )
 
         # create mini-batches with given size constraints
@@ -142,7 +157,7 @@ class FairseqTask(object):
         )
 
         # return a reusable, sharded iterator
-        return iterators.EpochBatchIterator(
+        epoch_iter = iterators.EpochBatchIterator(
             dataset=dataset,
             collate_fn=dataset.collater,
             batch_sampler=batch_sampler,
@@ -152,6 +167,8 @@ class FairseqTask(object):
             num_workers=num_workers,
             epoch=epoch,
         )
+        self.dataset_to_epoch_iter[dataset] = epoch_iter
+        return epoch_iter
 
     def build_model(self, args):
         """
@@ -186,8 +203,12 @@ class FairseqTask(object):
             from fairseq.sequence_scorer import SequenceScorer
             return SequenceScorer(self.target_dictionary)
         else:
-            from fairseq.sequence_generator import SequenceGenerator
-            return SequenceGenerator(
+            from fairseq.sequence_generator import SequenceGenerator, SequenceGeneratorWithAlignment
+            if getattr(args, 'print_alignment', False):
+                seq_gen_cls = SequenceGeneratorWithAlignment
+            else:
+                seq_gen_cls = SequenceGenerator
+            return seq_gen_cls(
                 self.target_dictionary,
                 beam_size=getattr(args, 'beam', 5),
                 max_len_a=getattr(args, 'max_len_a', 0),
