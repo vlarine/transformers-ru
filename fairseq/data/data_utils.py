@@ -10,6 +10,8 @@ except ImportError:
 import contextlib
 import itertools
 import os
+import sys
+import types
 
 import numpy as np
 
@@ -122,18 +124,7 @@ def collect_filtered(function, iterable, filtered):
             filtered.append(el)
 
 
-def filter_by_size(indices, size_fn, max_positions, raise_exception=False):
-    """
-    Filter indices based on their size.
-
-    Args:
-        indices (List[int]): ordered list of dataset indices
-        size_fn (callable): function that returns the size of a given index
-        max_positions (tuple): filter elements larger than this size.
-            Comparisons are done component-wise.
-        raise_exception (bool, optional): if ``True``, raise an exception if
-            any elements are filtered (default: False).
-    """
+def _filter_by_size_dynamic(indices, size_fn, max_positions, raise_exception=False):
     def check_size(idx):
         if isinstance(max_positions, float) or isinstance(max_positions, int):
             return size_fn(idx) <= max_positions
@@ -156,25 +147,51 @@ def filter_by_size(indices, size_fn, max_positions, raise_exception=False):
             # For MultiCorpusSampledDataset, will generalize it later
             if not isinstance(size_fn(idx), Iterable):
                 return all(size_fn(idx) <= b for b in max_positions)
-            return all(a is None or b is None or a <= b
-                       for a, b in zip(size_fn(idx), max_positions))
-
+            return all(
+                a is None or b is None or a <= b
+                for a, b in zip(size_fn(idx), max_positions)
+            )
     ignored = []
     itr = collect_filtered(check_size, indices, ignored)
+    indices = np.fromiter(itr, dtype=np.int64, count=-1)
+    return indices, ignored
 
-    for idx in itr:
-        if len(ignored) > 0 and raise_exception:
-            raise Exception((
-                'Size of sample #{} is invalid (={}) since max_positions={}, '
-                'skip this example with --skip-invalid-size-inputs-valid-test'
-            ).format(ignored[0], size_fn(ignored[0]), max_positions))
-        yield idx
 
+def filter_by_size(indices, dataset, max_positions, raise_exception=False):
+    """
+    Filter indices based on their size.
+
+    Args:
+        indices (List[int]): ordered list of dataset indices
+        dataset (FairseqDataset): fairseq dataset instance
+        max_positions (tuple): filter elements larger than this size.
+            Comparisons are done component-wise.
+        raise_exception (bool, optional): if ``True``, raise an exception if
+            any elements are filtered (default: False).
+    """
+    if isinstance(max_positions, float) or isinstance(max_positions, int):
+        if hasattr(dataset, 'sizes') and isinstance(dataset.sizes, np.ndarray):
+            ignored = indices[dataset.sizes[indices] > max_positions].tolist()
+            indices = indices[dataset.sizes[indices] <= max_positions]
+        elif hasattr(dataset, 'sizes') and isinstance(dataset.sizes, list) and len(dataset.sizes) == 1:
+            ignored = indices[dataset.sizes[0][indices] > max_positions].tolist()
+            indices = indices[dataset.sizes[0][indices] <= max_positions]
+        else:
+            indices, ignored = _filter_by_size_dynamic(indices, dataset.size, max_positions)
+    else:
+        indices, ignored = _filter_by_size_dynamic(indices, dataset.size, max_positions)
+
+    if len(ignored) > 0 and raise_exception:
+        raise Exception((
+            'Size of sample #{} is invalid (={}) since max_positions={}, '
+            'skip this example with --skip-invalid-size-inputs-valid-test'
+        ).format(ignored[0], dataset.size(ignored[0]), max_positions))
     if len(ignored) > 0:
         print((
             '| WARNING: {} samples have invalid sizes and will be skipped, '
             'max_positions={}, first few sample ids={}'
         ).format(len(ignored), max_positions, ignored[:10]))
+    return indices
 
 
 def batch_by_size(
@@ -196,50 +213,29 @@ def batch_by_size(
         required_batch_size_multiple (int, optional): require batch size to
             be a multiple of N (default: 1).
     """
-    max_tokens = max_tokens if max_tokens is not None else float('Inf')
-    max_sentences = max_sentences if max_sentences is not None else float('Inf')
+    try:
+        from fairseq.data.data_utils_fast import batch_by_size_fast
+    except ImportError:
+        raise ImportError(
+            'Please build Cython components with: `pip install --editable .` '
+            'or `python setup.py build_ext --inplace`'
+        )
+
+    max_tokens = max_tokens if max_tokens is not None else sys.maxsize
+    max_sentences = max_sentences if max_sentences is not None else sys.maxsize
     bsz_mult = required_batch_size_multiple
 
-    batch = []
+    if isinstance(indices, types.GeneratorType):
+        indices = np.fromiter(indices, dtype=np.int64, count=-1)
 
-    def is_batch_full(num_tokens):
-        if len(batch) == 0:
-            return False
-        if len(batch) == max_sentences:
-            return True
-        if num_tokens > max_tokens:
-            return True
-        return False
-
-    sample_len = 0
-    sample_lens = []
-    for idx in indices:
-        sample_lens.append(num_tokens_fn(idx))
-        sample_len = max(sample_len, sample_lens[-1])
-        assert sample_len <= max_tokens, (
-            "sentence at index {} of size {} exceeds max_tokens "
-            "limit of {}!".format(idx, sample_len, max_tokens)
-        )
-        num_tokens = (len(batch) + 1) * sample_len
-        if is_batch_full(num_tokens):
-            mod_len = max(
-                bsz_mult * (len(batch) // bsz_mult),
-                len(batch) % bsz_mult,
-            )
-            yield batch[:mod_len]
-            batch = batch[mod_len:]
-            sample_lens = sample_lens[mod_len:]
-            sample_len = max(sample_lens) if len(sample_lens) > 0 else 0
-
-        batch.append(idx)
-
-    if len(batch) > 0:
-        yield batch
+    return batch_by_size_fast(indices, num_tokens_fn, max_tokens, max_sentences, bsz_mult)
 
 
 def process_bpe_symbol(sentence: str, bpe_symbol: str):
     if bpe_symbol == 'sentencepiece':
         sentence = sentence.replace(' ', '').replace('\u2581', ' ').strip()
+    elif bpe_symbol == '_EOW':
+        sentence = sentence.replace(' ', '').replace('_EOW', ' ').strip()
     elif bpe_symbol is not None:
         sentence = (sentence + ' ').replace(bpe_symbol, '').rstrip()
     return sentence

@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from fairseq import utils
+from fairseq.checkpoint_utils import prune_state_dict
 from fairseq.data import Dictionary
 from fairseq.models import FairseqDecoder, FairseqEncoder
 
@@ -58,7 +59,7 @@ class BaseFairseqModel(nn.Module):
         """Maximum length supported by the model."""
         return None
 
-    def load_state_dict(self, state_dict, strict=True):
+    def load_state_dict(self, state_dict, strict=True, args=None):
         """Copies parameters and buffers from *state_dict* into this module and
         its descendants.
 
@@ -66,7 +67,8 @@ class BaseFairseqModel(nn.Module):
         this additionally "upgrades" *state_dicts* from old checkpoints.
         """
         self.upgrade_state_dict(state_dict)
-        return super().load_state_dict(state_dict, strict)
+        new_state_dict = prune_state_dict(state_dict, args)
+        return super().load_state_dict(new_state_dict, strict)
 
     def upgrade_state_dict(self, state_dict):
         """Upgrade old state dicts to work with newer code."""
@@ -222,6 +224,9 @@ class FairseqEncoderDecoderModel(BaseFairseqModel):
         decoder_out = self.decoder(prev_output_tokens, encoder_out=encoder_out, **kwargs)
         return decoder_out
 
+    def forward_decoder(self, prev_output_tokens, **kwargs):
+        return self.decoder(prev_output_tokens, **kwargs)
+
     def extract_features(self, src_tokens, src_lengths, prev_output_tokens, **kwargs):
         """
         Similar to *forward* but only return features.
@@ -365,6 +370,9 @@ class FairseqLanguageModel(BaseFairseqModel):
                 - a dictionary with any model-specific outputs
         """
         return self.decoder(src_tokens, **kwargs)
+
+    def forward_decoder(self, prev_output_tokens, **kwargs):
+        return self.decoder(prev_output_tokens, **kwargs)
 
     def extract_features(self, src_tokens, **kwargs):
         """

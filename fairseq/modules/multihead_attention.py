@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import math
 import torch
 from torch import nn
 from torch.nn import Parameter
@@ -38,17 +39,9 @@ class MultiheadAttention(nn.Module):
         assert not self.self_attention or self.qkv_same_dim, 'Self-attention requires query, key and ' \
                                                              'value to be of the same size'
 
-        if self.qkv_same_dim:
-            self.in_proj_weight = Parameter(torch.Tensor(3 * embed_dim, embed_dim))
-        else:
-            self.k_proj_weight = Parameter(torch.Tensor(embed_dim, self.kdim))
-            self.v_proj_weight = Parameter(torch.Tensor(embed_dim, self.vdim))
-            self.q_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
-
-        if bias:
-            self.in_proj_bias = Parameter(torch.Tensor(3 * embed_dim))
-        else:
-            self.register_parameter('in_proj_bias', None)
+        self.k_proj = nn.Linear(self.kdim, embed_dim, bias=bias)
+        self.v_proj = nn.Linear(self.vdim, embed_dim, bias=bias)
+        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
@@ -75,56 +68,71 @@ class MultiheadAttention(nn.Module):
 
     def reset_parameters(self):
         if self.qkv_same_dim:
-            nn.init.xavier_uniform_(self.in_proj_weight)
+            # Empirically observed the convergence to be much better with
+            # the scaled initialization
+            nn.init.xavier_uniform_(self.k_proj.weight, gain=1/math.sqrt(2))
+            nn.init.xavier_uniform_(self.v_proj.weight, gain=1/math.sqrt(2))
+            nn.init.xavier_uniform_(self.q_proj.weight, gain=1/math.sqrt(2))
         else:
-            nn.init.xavier_uniform_(self.k_proj_weight)
-            nn.init.xavier_uniform_(self.v_proj_weight)
-            nn.init.xavier_uniform_(self.q_proj_weight)
+            nn.init.xavier_uniform_(self.k_proj.weight)
+            nn.init.xavier_uniform_(self.v_proj.weight)
+            nn.init.xavier_uniform_(self.q_proj.weight)
 
         nn.init.xavier_uniform_(self.out_proj.weight)
-        if self.in_proj_bias is not None:
-            nn.init.constant_(self.in_proj_bias, 0.)
-            nn.init.constant_(self.out_proj.bias, 0.)
+        nn.init.constant_(self.out_proj.bias, 0.)
         if self.bias_k is not None:
             nn.init.xavier_normal_(self.bias_k)
         if self.bias_v is not None:
             nn.init.xavier_normal_(self.bias_v)
 
-    def forward(self, query, key, value, key_padding_mask=None, incremental_state=None,
-                need_weights=True, static_kv=False, attn_mask=None):
+    def forward(
+        self,
+        query, key, value,
+        key_padding_mask=None,
+        incremental_state=None,
+        need_weights=True,
+        static_kv=False,
+        attn_mask=None,
+        before_softmax=False,
+        need_head_weights=False,
+    ):
         """Input shape: Time x Batch x Channel
 
-        Timesteps can be masked by supplying a T x T mask in the
-        `attn_mask` argument. Padding elements can be excluded from
-        the key by passing a binary ByteTensor (`key_padding_mask`) with shape:
-        batch x src_len, where padding elements are indicated by 1s.
+        Args:
+            key_padding_mask (ByteTensor, optional): mask to exclude
+                keys that are pads, of shape `(batch, src_len)`, where
+                padding elements are indicated by 1s.
+            need_weights (bool, optional): return the attention weights,
+                averaged over heads (default: False).
+            attn_mask (ByteTensor, optional): typically used to
+                implement causal attention, where the mask prevents the
+                attention from looking forward in time (default: None).
+            before_softmax (bool, optional): return the raw attention
+                weights and values before the attention softmax.
+            need_head_weights (bool, optional): return the attention
+                weights for each head. Implies *need_weights*. Default:
+                return the average attention weights over all heads.
         """
+        if need_head_weights:
+            need_weights = True
+
         tgt_len, bsz, embed_dim = query.size()
         assert embed_dim == self.embed_dim
         assert list(query.size()) == [tgt_len, bsz, embed_dim]
 
         if self.enable_torch_version and not self.onnx_trace and incremental_state is None and not static_kv:
-            if self.qkv_same_dim:
-                return F.multi_head_attention_forward(query, key, value,
-                                                      self.embed_dim, self.num_heads,
-                                                      self.in_proj_weight,
-                                                      self.in_proj_bias, self.bias_k, self.bias_v,
-                                                      self.add_zero_attn, self.dropout,
-                                                      self.out_proj.weight, self.out_proj.bias,
-                                                      self.training, key_padding_mask, need_weights,
-                                                      attn_mask)
-            else:
-                return F.multi_head_attention_forward(query, key, value,
-                                                      self.embed_dim, self.num_heads,
-                                                      torch.empty([0]),
-                                                      self.in_proj_bias, self.bias_k, self.bias_v,
-                                                      self.add_zero_attn, self.dropout,
-                                                      self.out_proj.weight, self.out_proj.bias,
-                                                      self.training, key_padding_mask, need_weights,
-                                                      attn_mask, use_separate_proj_weight=True,
-                                                      q_proj_weight=self.q_proj_weight,
-                                                      k_proj_weight=self.k_proj_weight,
-                                                      v_proj_weight=self.v_proj_weight)
+            return F.multi_head_attention_forward(query, key, value,
+                                                  self.embed_dim, self.num_heads,
+                                                  torch.empty([0]),
+                                                  torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
+                                                  self.bias_k, self.bias_v,
+                                                  self.add_zero_attn, self.dropout,
+                                                  self.out_proj.weight, self.out_proj.bias,
+                                                  self.training, key_padding_mask, need_weights,
+                                                  attn_mask, use_separate_proj_weight=True,
+                                                  q_proj_weight=self.q_proj.weight,
+                                                  k_proj_weight=self.k_proj.weight,
+                                                  v_proj_weight=self.v_proj.weight)
 
         if incremental_state is not None:
             saved_state = self._get_input_buffer(incremental_state)
@@ -138,22 +146,23 @@ class MultiheadAttention(nn.Module):
             saved_state = None
 
         if self.self_attention:
-            # self-attention
-            q, k, v = self.in_proj_qkv(query)
+            q = self.q_proj(query)
+            k = self.k_proj(query)
+            v = self.v_proj(query)
         elif self.encoder_decoder_attention:
             # encoder-decoder attention
-            q = self.in_proj_q(query)
+            q = self.q_proj(query)
             if key is None:
                 assert value is None
                 k = v = None
             else:
-                k = self.in_proj_k(key)
-                v = self.in_proj_v(key)
+                k = self.k_proj(key)
+                v = self.v_proj(key)
 
         else:
-            q = self.in_proj_q(query)
-            k = self.in_proj_k(key)
-            v = self.in_proj_v(value)
+            q = self.q_proj(query)
+            k = self.k_proj(key)
+            v = self.v_proj(value)
         q *= self.scaling
 
         if self.bias_k is not None:
@@ -186,8 +195,17 @@ class MultiheadAttention(nn.Module):
                     v = prev_value
                 else:
                     v = torch.cat((prev_value, v), dim=1)
+            key_padding_mask = self._append_prev_key_padding_mask(
+                key_padding_mask=key_padding_mask,
+                prev_key_padding_mask=saved_state.get('prev_key_padding_mask', None),
+                batch_size=bsz,
+                src_len=k.size(1),
+                static_kv=static_kv,
+            )
+
             saved_state['prev_key'] = k.view(bsz, self.num_heads, -1, self.head_dim)
             saved_state['prev_value'] = v.view(bsz, self.num_heads, -1, self.head_dim)
+            saved_state['prev_key_padding_mask'] = key_padding_mask
 
             self._set_input_buffer(incremental_state, saved_state)
 
@@ -226,25 +244,20 @@ class MultiheadAttention(nn.Module):
         if key_padding_mask is not None:
             # don't attend to padding symbols
             attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            if self.onnx_trace:
-                attn_weights = torch.where(
-                    key_padding_mask.unsqueeze(1).unsqueeze(2),
-                    torch.Tensor([float("-Inf")]),
-                    attn_weights.float()
-                ).type_as(attn_weights)
-            else:
-                attn_weights = attn_weights.masked_fill(
-                    key_padding_mask.unsqueeze(1).unsqueeze(2),
-                    float('-inf'),
-                )
+            attn_weights = attn_weights.masked_fill(
+                key_padding_mask.unsqueeze(1).unsqueeze(2),
+                float('-inf'),
+            )
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
-        attn_weights = utils.softmax(
-            attn_weights, dim=-1, onnx_trace=self.onnx_trace,
-        ).type_as(attn_weights)
-        attn_weights = F.dropout(attn_weights, p=self.dropout, training=self.training)
+        if before_softmax:
+            return attn_weights, v
 
-        attn = torch.bmm(attn_weights, v)
+        attn_weights_float = utils.softmax(attn_weights, dim=-1, onnx_trace=self.onnx_trace)
+        attn_weights = attn_weights_float.type_as(attn_weights)
+        attn_probs = F.dropout(attn_weights_float.type_as(attn_weights), p=self.dropout, training=self.training)
+
+        attn = torch.bmm(attn_probs, v)
         assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
         if (self.onnx_trace and attn.size(1) == 1):
             # when ONNX tracing a single decoder step (sequence length == 1)
@@ -255,60 +268,50 @@ class MultiheadAttention(nn.Module):
         attn = self.out_proj(attn)
 
         if need_weights:
-            # average attention weights over heads
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights.sum(dim=1) / self.num_heads
+            attn_weights = attn_weights_float.view(bsz, self.num_heads, tgt_len, src_len).transpose(1, 0)
+            if not need_head_weights:
+                # average attention weights over heads
+                attn_weights = attn_weights.mean(dim=0)
         else:
             attn_weights = None
 
         return attn, attn_weights
 
-    def in_proj_qkv(self, query):
-        return self._in_proj(query).chunk(3, dim=-1)
-
-    def in_proj_q(self, query):
-        if self.qkv_same_dim:
-            return self._in_proj(query, end=self.embed_dim)
-        else:
-            bias = self.in_proj_bias
-            if bias is not None:
-                bias = bias[:self.embed_dim]
-            return F.linear(query, self.q_proj_weight, bias)
-
-    def in_proj_k(self, key):
-        if self.qkv_same_dim:
-            return self._in_proj(key, start=self.embed_dim, end=2 * self.embed_dim)
-        else:
-            weight = self.k_proj_weight
-            bias = self.in_proj_bias
-            if bias is not None:
-                bias = bias[self.embed_dim:2 * self.embed_dim]
-            return F.linear(key, weight, bias)
-
-    def in_proj_v(self, value):
-        if self.qkv_same_dim:
-            return self._in_proj(value, start=2 * self.embed_dim)
-        else:
-            weight = self.v_proj_weight
-            bias = self.in_proj_bias
-            if bias is not None:
-                bias = bias[2 * self.embed_dim:]
-            return F.linear(value, weight, bias)
-
-    def _in_proj(self, input, start=0, end=None):
-        weight = self.in_proj_weight
-        bias = self.in_proj_bias
-        weight = weight[start:end, :]
-        if bias is not None:
-            bias = bias[start:end]
-        return F.linear(input, weight, bias)
+    @staticmethod
+    def _append_prev_key_padding_mask(
+        key_padding_mask,
+        prev_key_padding_mask,
+        batch_size,
+        src_len,
+        static_kv,
+    ):
+        # saved key padding masks have shape (bsz, seq_len)
+        if prev_key_padding_mask is not None and static_kv:
+            key_padding_mask = prev_key_padding_mask
+        elif prev_key_padding_mask is not None and key_padding_mask is not None:
+            key_padding_mask = torch.cat((prev_key_padding_mask, key_padding_mask), dim=1)
+        # During incremental decoding, as the padding token enters and
+        # leaves the frame, there will be a time when prev or current
+        # is None
+        elif prev_key_padding_mask is not None:
+            filler = torch.zeros(batch_size, src_len - prev_key_padding_mask.size(1)).bool()
+            if prev_key_padding_mask.is_cuda:
+                filler = filler.cuda()
+            key_padding_mask = torch.cat((prev_key_padding_mask, filler), dim=1)
+        elif key_padding_mask is not None:
+            filler = torch.zeros(batch_size, src_len - key_padding_mask.size(1)).bool()
+            if key_padding_mask.is_cuda:
+                filler = filler.cuda()
+            key_padding_mask = torch.cat((filler, key_padding_mask), dim=1)
+        return key_padding_mask
 
     def reorder_incremental_state(self, incremental_state, new_order):
         """Reorder buffered internal state (for incremental generation)."""
         input_buffer = self._get_input_buffer(incremental_state)
         if input_buffer is not None:
             for k in input_buffer.keys():
-                input_buffer[k] = input_buffer[k].index_select(0, new_order)
+                if input_buffer[k] is not None:
+                    input_buffer[k] = input_buffer[k].index_select(0, new_order)
             self._set_input_buffer(incremental_state, input_buffer)
 
     def _get_input_buffer(self, incremental_state):
@@ -328,3 +331,32 @@ class MultiheadAttention(nn.Module):
 
     def apply_sparse_mask(self, attn_weights, tgt_len, src_len, bsz):
         return attn_weights
+
+    def upgrade_state_dict_named(self, state_dict, name):
+        prefix = name + '.' if name != '' else ''
+        items_to_add = {}
+        keys_to_remove = []
+        for k in state_dict.keys():
+            if k.endswith(prefix + 'in_proj_weight'):
+                # in_proj_weight used to be q + k + v with same dimensions
+                dim = int(state_dict[k].shape[0] / 3)
+                items_to_add[prefix + 'q_proj.weight'] = state_dict[k][:dim]
+                items_to_add[prefix + 'k_proj.weight'] = state_dict[k][dim:2*dim]
+                items_to_add[prefix + 'v_proj.weight'] = state_dict[k][2*dim:]
+
+                keys_to_remove.append(k)
+
+                k_bias = prefix + 'in_proj_bias'
+                if k_bias in state_dict.keys():
+                    dim = int(state_dict[k].shape[0] / 3)
+                    items_to_add[prefix + 'q_proj.bias'] = state_dict[k_bias][:dim]
+                    items_to_add[prefix + 'k_proj.bias'] = state_dict[k_bias][dim:2*dim]
+                    items_to_add[prefix + 'v_proj.bias'] = state_dict[k_bias][2*dim:]
+
+                    keys_to_remove.append(prefix + 'in_proj_bias')
+
+        for k in keys_to_remove:
+            del state_dict[k]
+
+        for key, value in items_to_add.items():
+            state_dict[key] = value

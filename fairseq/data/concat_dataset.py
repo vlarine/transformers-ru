@@ -64,11 +64,21 @@ class ConcatDataset(FairseqDataset):
     def num_tokens(self, index: int):
         return np.max(self.size(index))
 
+    def attr(self, attr: str, index: int):
+        dataset_idx = bisect.bisect_right(self.cumulative_sizes, index)
+        return getattr(self.datasets[dataset_idx], attr, None)
+
     @property
     def sizes(self):
-        return np.concatenate(
-            [np.tile(ds.sizes, sr) for ds, sr in zip(self.datasets, self.sample_ratios)]
-        )
+        _dataset_sizes = []
+        for ds, sr in zip(self.datasets, self.sample_ratios):
+            if isinstance(ds.sizes, np.ndarray):
+                _dataset_sizes.append(np.tile(ds.sizes, sr))
+            else:
+                # Only support underlying dataset with single size array.
+                assert isinstance(ds.sizes, list)
+                _dataset_sizes.append(np.tile(ds.sizes[0], sr))
+        return np.concatenate(_dataset_sizes)
 
     @property
     def supports_prefetch(self):
@@ -87,3 +97,9 @@ class ConcatDataset(FairseqDataset):
             if getattr(ds, 'supports_prefetch', False):
                 ds.prefetch([(i - frm) % real_size for i in indices if frm <= i < to])
             frm = to
+
+    def set_epoch(self, epoch):
+        super().set_epoch(epoch)
+        for ds in self.datasets:
+            if hasattr(ds, 'set_epoch'):
+                ds.set_epoch(epoch)
