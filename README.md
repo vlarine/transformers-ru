@@ -77,6 +77,20 @@ The neuron view visualization from BertViz:
 
 [[Notebook]](https://github.com/vlarine/transformers-ru/blob/master/neuron_view_bert.ipynb)
 
+## Generative models
+
+### GPT-2 models
+
+#### Mikhail Grankin's model
+
+Code: [https://github.com/mgrankin/ru_transformers](https://github.com/mgrankin/ru_transformers)
+
+Download models:
+```
+pip install awscli
+aws s3 sync --no-sign-request s3://models.dobro.ai/gpt2/ru/unfreeze_all gpt2
+```
+
 ## RNN Models
 
 There are some RNN models for russian language.
