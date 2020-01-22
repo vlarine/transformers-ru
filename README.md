@@ -93,8 +93,8 @@ aws s3 sync --no-sign-request s3://models.dobro.ai/gpt2/ru/unfreeze_all gpt2
 
 #### Vladimir Larin's model
 
-Code: [https://github.com/vlarine/ruGPT2](https://github.com/vlarine/ruGPT2)
-Model: [gpt2_345m.tgz](https://drive.google.com/open?id=1dw_UzN-ruUbkjU24zCBUJFsFe1iFiv1d)
+* Code: [https://github.com/vlarine/ruGPT2](https://github.com/vlarine/ruGPT2)
+* Model: [gpt2_345m.tgz](https://drive.google.com/open?id=1dw_UzN-ruUbkjU24zCBUJFsFe1iFiv1d)
 
 ## RNN Models
 
