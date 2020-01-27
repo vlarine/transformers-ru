@@ -173,6 +173,8 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                             logger.warning("Could not find answer: '%s' vs. '%s'",
                                            actual_text, cleaned_answer_text)
                             continue
+                            #orig_answer_text = doc_tokens[start_position:(end_position + 1)]
+                            #orig_answer_text = actual_text
                     else:
                         start_position = -1
                         end_position = -1
