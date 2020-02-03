@@ -110,8 +110,9 @@ There are some RNN models for russian language.
 
 #### [RusVectōrēs](http://rusvectores.org/en/models/)
 
-* RNC and Wikipedia December 2018 (tokens): [[model]](http://vectors.nlpl.eu/repository/11/195.zip)
-* RNC and Wikipedia December 2018 (lemmas): [[model]](http://vectors.nlpl.eu/repository/11/196.zip)
+* RNC and Wikipedia. December 2018 (tokens): [[model]](http://vectors.nlpl.eu/repository/11/195.zip)
+* RNC and Wikipedia. December 2018 (lemmas): [[model]](http://vectors.nlpl.eu/repository/11/196.zip)
+* Taiga 2048. December 2019 (lemmas): [[model]](http://vectors.nlpl.eu/repository/20/199.zip)
 
 ### ULMFit
 
